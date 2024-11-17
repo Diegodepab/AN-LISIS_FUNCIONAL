@@ -1,0 +1,3 @@
+# Análisis de Expresión Diferencial - Proyecto PRJNA156363
+
+Este repositorio usará datos del análisis de expresión diferencial de 6 librerías de genes de *Arabidopsis thaliana* del proyecto [PRJNA156363](https://www.ebi.ac.uk/ena/browser/view/PRJNA156363?show=reads). Los datos fueron [preprocesados y mapeados previamente con *Kallisto*.](https://usegalaxy.eu/published/history?id=1e4ffa727de55dbc). [En el repositorio](https://github.com/Diegodepab/RNAseqHAB) se puede ver el proceso realizad cuantificación de la expresión diferencial a partir de los recuentos obtenidos. Te da los genes resultados guardados en esta carpeta. 
