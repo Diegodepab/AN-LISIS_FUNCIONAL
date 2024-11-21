@@ -1,15 +1,81 @@
-import pandas as pd
-import requests
-import warnings
-import gzip
-import shutil
-import networkx as nx
-import matplotlib.pyplot as plt
-import scipy.stats
-import numpy as np
-from collections import defaultdict
+import subprocess
+import sys
 
-# Leer el archivo TSV (dataset original que contiene un listado de los genes diferencialmente expresados que has obtenido previamente)
+# Función para instalar una librería si no está disponible
+def install_package(package):
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+    except Exception as e:
+        print(f"Error installing package {package}: {e}")
+
+# Importar librerías con manejo de errores
+try:
+    import pandas as pd
+except ImportError:
+    install_package('pandas')
+    import pandas as pd
+
+try:
+    import requests
+except ImportError:
+    install_package('requests')
+    import requests
+
+try:
+    import warnings
+except ImportError:
+    install_package('warnings')  
+    import warnings
+
+try:
+    import gzip
+except ImportError:
+    install_package('gzip')  
+    import gzip
+
+try:
+    import shutil
+except ImportError:
+    install_package('shutil')  
+    import shutil
+
+try:
+    import networkx as nx
+except ImportError:
+    install_package('networkx')
+    import networkx as nx
+
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    install_package('matplotlib')
+    import matplotlib.pyplot as plt
+
+try:
+    import scipy.stats
+except ImportError:
+    install_package('scipy')
+    import scipy.stats
+
+try:
+    import numpy as np
+except ImportError:
+    install_package('numpy')
+    import numpy as np
+
+try:
+    from collections import defaultdict
+except ImportError:
+    install_package('collections')  # Parte de la librería estándar
+    from collections import defaultdict
+
+try:
+    import os
+except ImportError:
+    install_package('os')  # Parte de la librería estándar
+    import os
+
+# Leer el archivo TSV (dataset original que contiene un listado de los genes diferencialmente expresados)
 try:
     df = pd.read_csv('datos.tsv', sep='\t')
 except pd.errors.ParserError as e:
@@ -18,15 +84,18 @@ except pd.errors.ParserError as e:
 # Filtrar genes sobreexpresados (logFC > 0 y adj.P.Val < 0.05)
 overexpressed_genes = df[(df['logFC'] > 0) & (df['adj.P.Val'] < 0.05)]['ID'].tolist()
 
+# Definir el organismo (Arabidopsis thaliana) para STRING
+organism_taxon_id = 3702
+
 # Función para obtener identificador de STRING a partir del ID del gen
-def get_string_id(gene_id):
-    url = f"https://string-db.org/api/json/get_string_ids?identifiers={gene_id}&species=3702"
+def get_string_id(gene_id, organism_taxon_id):
+    url = f"https://string-db.org/api/json/get_string_ids?identifiers={gene_id}&species={organism_taxon_id}"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
         if data:
-            # Devolver el primer ID de STRING encontrado
-            return data[0]['stringId'] if 'stringId' in data[0] else None
+            # Devolver el primer ID de STRING encontrado, quitando el prefijo '3702.'
+            return data[0]['stringId'].split('.')[1] if 'stringId' in data[0] else None
     else:
         warnings.warn(f"No se encontró identificador de STRING para {gene_id}.")
     return None
@@ -34,13 +103,10 @@ def get_string_id(gene_id):
 # Obtener los identificadores de STRING para los genes sobreexpresados
 gene_string_ids = {}
 for gene in overexpressed_genes:
-    string_id = get_string_id(gene)
+    string_id = get_string_id(gene, organism_taxon_id)
     if string_id:
         gene_string_ids[gene] = string_id
 
-
-# Definir el organismo (Arabidopsis thaliana) para STRING, 
-organism_taxon_id = 3702
 
 # URL base de STRING para redes de interacción proteica
 base_url = "https://stringdb-downloads.org/download/protein.links.v12.0/"
@@ -72,7 +138,11 @@ print(f"Archivo descomprimido: {output_file}")
 network_df = pd.read_csv(output_file, sep=' ')
 
 # Filtrar por combined score escogí 400, pero 700 o 900 pueden ser valores interesantes para estudiar relaciones más directas
-filtered_network_df = network_df[network_df['combined_score'] > 400]
+filtered_network_df = network_df[network_df['combined_score'] > 400].copy()  # Hacer una copia explícita
+
+# Eliminar el prefijo '3702.' de las columnas 'protein1' y 'protein2' usando .loc
+filtered_network_df['protein1'] = filtered_network_df['protein1'].str.replace('3702.', '', regex=False)
+filtered_network_df['protein2'] = filtered_network_df['protein2'].str.replace('3702.', '', regex=False)
 
 # Obtener los STRING IDs del DataFrame filtrado
 filtered_proteins = set(filtered_network_df['protein1']).union(set(filtered_network_df['protein2']))
@@ -81,12 +151,13 @@ filtered_proteins = set(filtered_network_df['protein1']).union(set(filtered_netw
 for gene, string_id in gene_string_ids.items():
     if string_id not in filtered_proteins:
         warnings.warn(f"El STRING ID {string_id} para el gen {gene} no se encontró en la red filtrada.")
-    
+
     
 
 #----------------------DIAMOnD-------------------------
+print("comienzo del DIAMOnD, puede durar unos minutos")
 alpha= 1 
-
+n=50
 #funcion que crea el grafo a partir del dataframe estudiado
 def read_input_from_df(df):
     G = nx.Graph()
@@ -102,8 +173,9 @@ def read_input_from_df(df):
 ################################### main##############################
 
 # Leer el grafo desde el DataFrame
-G = read_input_from_df(df)
+G = read_input_from_df(filtered_network_df)
 
+seed_genes = set(gene_string_ids.values())
 
 #G, seed_genes, n, alpha
 # G, seed_genes, diamond_genes
@@ -146,13 +218,13 @@ def diamond_iteration_of_first_X_nodes(G, S, X, alpha=1):
     Realiza la iteración DIAMOnD sobre los primeros X nodos seleccionados, basándose en un conjunto de nodos semilla S.
     Utiliza el p-valor para seleccionar los nodos de forma iterativa.
     """
-    added_nodes = []  # Lista para almacenar los nodos seleccionados
+    added_nodes = list(S)  # Incluir los nodos semilla directamente en la lista de nodos seleccionados
     neighbors = {node: set(G.neighbors(node)) for node in G.nodes}  # Diccionario de vecinos de cada nodo
     degrees = dict(G.degree())  # Obtener grados de nodos (número de conexiones para cada nodo)
     cluster_nodes = set(S)  # Conjunto de nodos semilla
     gamma_ln = compute_all_gamma_ln(len(G.nodes))  # Precomputar valores de logaritmo de gamma
 
-    # Iterar hasta seleccionar X nodos
+    # Iterar hasta seleccionar X nodos (incluyendo los semilla)
     while len(added_nodes) < X:
         min_p = float('inf')  # Inicializar el p-valor más bajo
         next_node = None  # Nodo a añadir en la siguiente iteración
@@ -183,43 +255,88 @@ def diamond_iteration_of_first_X_nodes(G, S, X, alpha=1):
 
     return added_nodes  # Retornar la lista de nodos seleccionados
 
+
 # ------------------- VISUALIZACIÓN -------------------
 
-def graficar_red_enriquecida(G, seed_genes, diamond_genes):
+def graficar_y_guardar_resultados(G, seed_genes, diamond_genes, carpeta_resultados='resultados_propagacion'):
     """
     Grafica la red enriquecida con los nodos semilla y los nodos seleccionados por DIAMOnD.
-    Los nodos semilla se representan en azul y los nodos DIAMOnD en naranja.
+    Guarda tanto la gráfica como los genes seleccionados en una carpeta especificada.
     """
+    # Crear carpeta si no existe
+    if not os.path.exists(carpeta_resultados):
+        os.makedirs(carpeta_resultados)
+    
+    # Guardar genes DIAMOnD en un archivo
+    with open(os.path.join(carpeta_resultados, 'diamond_genes.txt'), 'w') as f:
+        for gene in diamond_genes:
+            f.write(f"{gene}\n")
+    
+    # Configurar la disposición de la red para la gráfica
     pos = nx.spring_layout(G)  # Disposición de los nodos en el espacio (layout de la red)
-    plt.figure(figsize=(10, 10))  # Tamaño de la figura
+    plt.figure(figsize=(500, 500))  # Tamaño de la figura
 
     # Nodos de semillas (color azul claro)
     nx.draw_networkx_nodes(G, pos, nodelist=seed_genes, node_color='lightblue', node_size=500, label="Seed Genes")
 
     # Nodos DIAMOnD (color naranja)
-    nx.draw_networkx_nodes(G, pos, nodelist=diamond_genes, node_color='orange', node_size=300, label="DIAMOnD Genes")
+    nx.draw_networkx_nodes(G, pos, nodelist=diamond_genes, node_color='orange', node_size=100, label="DIAMOnD Genes")
 
-    # Enlaces entre nodos (conjunto de nodos semilla y DIAMOnD)
+    # Enlaces entre nodos (semillas y DIAMOnD)
     nx.draw_networkx_edges(G, pos, edgelist=[(u, v) for u, v in G.edges() if u in (seed_genes | set(diamond_genes)) and v in (seed_genes | set(diamond_genes))], alpha=0.5)
 
     # Etiquetas de los nodos
     nx.draw_networkx_labels(G, pos, font_size=8)
 
-    # Mostrar leyenda, título y la figura
+    # Mostrar leyenda y título
     plt.legend(loc="best")
     plt.title("Red de Genes Enriquecida usando DIAMOnD")
-    plt.show()
+
+    # Guardar la gráfica en la carpeta
+    plt.savefig(os.path.join(carpeta_resultados, 'red_enriquecida.png'))
+    plt.close()  # Cerrar la figura para liberar memoria
 
 # ------------------- EJECUCIÓN -------------------
-
-# Ejemplo de los datos cargados y creación de la red
-# seed_genes = seed_genes_grado  # Asignar el conjunto de genes semilla
 
 # Realizar la iteración DIAMOnD para obtener los genes seleccionados
 diamond_genes = diamond_iteration_of_first_X_nodes(G, seed_genes, n, alpha)
 
+
+# Ruta donde deseas guardar los genes y la grafica
+carpeta_resultados = 'resultados_propagacion'
+
 # Graficar la red enriquecida
-graficar_red_enriquecida(G, seed_genes, diamond_genes)
+graficar_y_guardar_resultados(G, seed_genes, diamond_genes, carpeta_resultados)
+
+"""
+def random_walk_with_restart(G, seed_nodes, restart_prob=0.85, max_iter=100):
+    #Algoritmo de Random Walk with Restart
+    nodes = list(G.nodes)
+    N = len(nodes)
+    r = {n: 1 / N for n in nodes}  # Distribución de probabilidad inicial uniforme
+    p = {n: 1 if n in seed_nodes else 0 for n in nodes}  # Reiniciar en nodos semilla
+    
+    for _ in range(max_iter):
+        r_next = {n: (1 - restart_prob) * sum(r[neighbor] / G.degree(neighbor) for neighbor in G.neighbors(n)) + restart_prob * p[n] for n in nodes}
+        r = r_next
+
+    # Ordenar nodos por importancia
+    return sorted(r.items(), key=lambda x: x[1], reverse=True)
+
+def heat_diffusion(G, seed_nodes, diffusion_time=10):
+    #Algoritmo de difusión de calor
+    heat = {n: 1 if n in seed_nodes else 0 for n in G.nodes}  # Calor inicial en nodos semilla
+    for _ in range(diffusion_time):
+        new_heat = {n: sum(heat[neighbor] / G.degree(neighbor) for neighbor in G.neighbors(n)) for n in G.nodes}
+        heat = new_heat
+    return sorted(heat.items(), key=lambda x: x[1], reverse=True)
+
+def personalized_pagerank(G, seed_nodes, alpha=0.85):
+    personalization = {n: 1 if n in seed_nodes else 0 for n in G.nodes}
+    return nx.pagerank(G, alpha=alpha, personalization=personalization)
+
+
+"""
 
 
 
