@@ -1,5 +1,6 @@
-import subprocess
-import sys
+############################################################
+########## Descarga o llamar las librerías #################
+############################################################
 
 # Función para instalar una librería si no está disponible
 def install_package(package):
@@ -74,18 +75,140 @@ try:
 except ImportError:
     install_package('os')  # Parte de la librería estándar
     import os
+    
+try:
+    import subprocess
+except ImportError:
+    print("subprocess no está instalado. Intentando instalar...")
+    # subprocess es parte de la librería estándar, así que esto no debería ser necesario
+    install_package('subprocess')
+    import subprocess
 
-# Leer el archivo TSV (dataset original que contiene un listado de los genes diferencialmente expresados)
+try:
+    import sys
+except ImportError:
+    print("sys no está instalado. Intentando instalar...")
+    # sys es parte de la librería estándar, así que esto no debería ser necesario
+    install_package('sys')
+    import sys
+
+try:
+    import csv
+except ImportError:
+    print("sys no está instalado. Intentando instalar...")
+    # sys es parte de la librería estándar, así que esto no debería ser necesario
+    install_package('csv')
+    import csv
+
+############################################################
+### Llamar los datos a usar (datos sobreexpresados #########
+############################################################
+    
+
+
+
+# Datos de ejemplo si no se puede leer el archivo CSV
 try:
     df = pd.read_csv('datos.tsv', sep='\t')
+    # Filtrar genes sobreexpresados (logFC > 0 y adj.P.Val < 0.05)
+    overexpressed_genes = df[(df['logFC'] > 0) & (df['adj.P.Val'] < 0.05)]['ID'].tolist()
 except pd.errors.ParserError as e:
-    warnings.warn(f"Error al analizar el archivo: {e}")
-
-# Filtrar genes sobreexpresados (logFC > 0 y adj.P.Val < 0.05)
-overexpressed_genes = df[(df['logFC'] > 0) & (df['adj.P.Val'] < 0.05)]['ID'].tolist()
+    warnings.warn(f"Error al analizar el archivo: {e}, se usará datos guardados")
+    overexpressed_genes = [
+        'AT5G25980', 'AT2G25510', 'AT5G26000', 'AT3G22231', 'AT1G56510', 
+        'AT5G02500', 'AT3G58780', 'AT2G14610', 'AT3G52700', 'AT5G23010', 'AT3G17390'
+    ]
 
 # Definir el organismo (Arabidopsis thaliana) para STRING
 organism_taxon_id = 3702
+
+############################################################
+### Aplicar análisis funcional a los genes dados ##########
+############################################################
+
+print("Se realizará un análisis funcional de los genes sobrexpresados, para contrastar contra los resultados finales")
+
+# STRINGdb API URL and method details
+STRING_API_URL = "https://version-11-5.string-db.org/api"
+OUTPUT_FORMAT = "json"
+METHOD = "enrichment"
+
+# Función para construir la URL de la solicitud
+def build_request_url():
+    return f"{STRING_API_URL}/{OUTPUT_FORMAT}/{METHOD}"
+
+# Función para construir los parámetros de la solicitud
+def build_params(gene_ids, organism_taxon_id):
+    return {
+        "identifiers": "%0d".join(gene_ids),  # Formatear la lista de identificadores de genes
+        "species": organism_taxon_id,  # Usar el ID taxonómico de Arabidopsis thaliana
+        "caller_identity": "test_HAB"  # Reemplazar con un identificador propio si es necesario
+    }
+
+# Función para hacer la solicitud POST a la API de STRINGdb
+def get_functional_enrichment_results(gene_ids, organism_taxon_id):
+    request_url = build_request_url()
+    params = build_params(gene_ids, organism_taxon_id)
+    
+    response = requests.post(request_url, data=params)
+    
+    if response.status_code != 200:
+        raise Exception(f"Error en la solicitud: {response.status_code}")
+    
+    return response.json()
+
+# Función para filtrar los resultados con FDR < 0.01 y categoría "Process"
+def filter_significant_processes(data):
+    categorias = ["Process", "Component", "Function"]  # Categorías funcionales
+    return [
+        row for row in data
+        if row["category"] in categorias and float(row["fdr"]) < 0.01
+    ]
+
+# Función para guardar los resultados en un archivo CSV
+def save_results_to_csv(filtered_data, filename="datos_iniciales_string_db_results.csv"):
+    # Definir las cabeceras del archivo CSV
+    headers = ["Term", "Preferred Names", "FDR", "Category", "Description"]
+    
+    # Abrir el archivo CSV en modo escritura
+    with open(filename, mode="w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(headers)  # Escribir las cabeceras
+        
+        # Escribir cada fila de datos
+        for row in filtered_data:
+            term = row["term"]
+            preferred_names = ",".join(row["preferredNames"])
+            fdr = float(row["fdr"])
+            description = row["description"]
+            category = row["category"]
+            
+            writer.writerow([term, preferred_names, fdr, category, description])
+    
+    print(f"Resultados guardados en {filename}")
+
+# Función principal para ejecutar el análisis y guardar los resultados
+def analyze_and_save_functional_enrichment(gene_ids, organism_taxon_id, filename="string_db_results.csv"):
+    try:
+        # Obtener los resultados de la API
+        data = get_functional_enrichment_results(gene_ids, organism_taxon_id)
+        
+        # Filtrar los resultados para incluir solo GO Biological Processes con FDR < 0.01
+        filtered_data = filter_significant_processes(data)
+        
+        # Guardar los resultados en el archivo CSV
+        save_results_to_csv(filtered_data, filename)
+    
+    except Exception as e:
+        print(f"Error durante el análisis: {e}")
+        
+# Ejecutar el análisis y guardar los resultados en CSV
+analyze_and_save_functional_enrichment(overexpressed_genes, organism_taxon_id, "datos_iniciales_string_db_results.csv")
+
+
+############################################################
+####### Descarga de red para la propagación ################
+############################################################
 
 # Función para obtener identificador de STRING a partir del ID del gen
 def get_string_id(gene_id, organism_taxon_id):
@@ -152,12 +275,14 @@ for gene, string_id in gene_string_ids.items():
     if string_id not in filtered_proteins:
         warnings.warn(f"El STRING ID {string_id} para el gen {gene} no se encontró en la red filtrada.")
 
-    
 
-#----------------------DIAMOnD-------------------------
+############################################################
+################ Propagación de red ########################
+############################################################
+
 print("comienzo del DIAMOnD, puede durar unos minutos")
 alpha= 1 
-n=50
+n=40
 #funcion que crea el grafo a partir del dataframe estudiado
 def read_input_from_df(df):
     G = nx.Graph()
@@ -337,6 +462,3 @@ def personalized_pagerank(G, seed_nodes, alpha=0.85):
 
 
 """
-
-
-
