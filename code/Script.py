@@ -195,6 +195,7 @@ def analyze_and_save_functional_enrichment(gene_ids, organism_taxon_id, filename
             # Filtrar los resultados para incluir solo GO Biological Processes con FDR < 0.01
             filtered_data = filter_significant_processes(data)
             if filtered_data is None:
+                # si el número de genes es muy elevado puede hacer que string me devuelva pocos valores a veces
                 filtered_data = data
             # Guardar todos los resultados filtrados en el archivo CSV
             save_results_to_csv(filtered_data, filename)
