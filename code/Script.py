@@ -138,17 +138,17 @@ def build_request_url():
     return f"{STRING_API_URL}/{OUTPUT_FORMAT}/{METHOD}"
 
 # Función para construir los parámetros de la solicitud
-def build_params(gene_ids, organism_taxon_id):
+def build_params(gene_id, organism_taxon_id):
     return {
-        "identifiers": "%0d".join(gene_ids),  # Formatear la lista de identificadores de genes
+        "identifiers": gene_id,  # Solo un identificador por solicitud
         "species": organism_taxon_id,  # Usar el ID taxonómico de Arabidopsis thaliana
         "caller_identity": "test_HAB"  # Reemplazar con un identificador propio si es necesario
     }
 
 # Función para hacer la solicitud POST a la API de STRINGdb
-def get_functional_enrichment_results(gene_ids, organism_taxon_id):
+def get_functional_enrichment_results(gene_id, organism_taxon_id):
     request_url = build_request_url()
-    params = build_params(gene_ids, organism_taxon_id)
+    params = build_params(gene_id, organism_taxon_id)
     
     response = requests.post(request_url, data=params)
     
@@ -162,7 +162,7 @@ def filter_significant_processes(data):
     categorias = ["Process", "Component", "Function"]  # Categorías funcionales
     return [
         row for row in data
-        if row["category"] in categorias and float(row["fdr"]) < 0.01
+        if row["category"] in categorias and float(row["fdr"]) < 0.001
     ]
 
 # Función para guardar los resultados en un archivo CSV
@@ -190,18 +190,19 @@ def save_results_to_csv(filtered_data, filename="datos_iniciales_string_db_resul
 # Función principal para ejecutar el análisis y guardar los resultados
 def analyze_and_save_functional_enrichment(gene_ids, organism_taxon_id, filename="string_db_results.csv"):
     try:
-        # Obtener los resultados de la API
-        data = get_functional_enrichment_results(gene_ids, organism_taxon_id)
+            # Obtener los resultados de la API para un gen
+            data = get_functional_enrichment_results(gene_ids, organism_taxon_id)
+            # Filtrar los resultados para incluir solo GO Biological Processes con FDR < 0.01
+            filtered_data = filter_significant_processes(data)
+            if filtered_data is None:
+                filtered_data = data
+            # Guardar todos los resultados filtrados en el archivo CSV
+            save_results_to_csv(filtered_data, filename)
+
         
-        # Filtrar los resultados para incluir solo GO Biological Processes con FDR < 0.01
-        filtered_data = filter_significant_processes(data)
-        
-        # Guardar los resultados en el archivo CSV
-        save_results_to_csv(filtered_data, filename)
-    
     except Exception as e:
-        print(f"Error durante el análisis: {e}")
-        
+            print(f"Error durante el análisis del gen {gene_ids}: {e}")
+    
 # Ejecutar el análisis y guardar los resultados en CSV
 analyze_and_save_functional_enrichment(overexpressed_genes, organism_taxon_id, "datos_iniciales_string_db_results.csv")
 
@@ -281,30 +282,23 @@ for gene, string_id in gene_string_ids.items():
 ############################################################
 
 print("comienzo del DIAMOnD, puede durar unos minutos")
-alpha= 1 
-n=40
-#funcion que crea el grafo a partir del dataframe estudiado
+alpha= 0.9
+n=35
+
+# Función optimizada para crear el grafo desde el DataFrame
 def read_input_from_df(df):
     G = nx.Graph()
-
-    # Recorre el DataFrame fila por fila, agregando cada arista al grafo
-    for index, row in df.iterrows():
-        node1 = str(row.iloc[0])  # Acceder a la primera columna por posición
-        node2 = str(row.iloc[1])  # Acceder a la segunda columna por posición
-        G.add_edge(node1, node2)
-
+    
+    # Usar zip para combinar las columnas de manera eficiente
+    node_pairs = zip(df.iloc[:, 0], df.iloc[:, 1])  # Accede a las dos primeras columnas
+    G.add_edges_from(node_pairs)  # Agrega todas las aristas de una vez
+    
     return G
-
-################################### main##############################
 
 # Leer el grafo desde el DataFrame
 G = read_input_from_df(filtered_network_df)
 
 seed_genes = set(gene_string_ids.values())
-
-#G, seed_genes, n, alpha
-# G, seed_genes, diamond_genes
-
 
 # ------------------- FUNCIONES DE DIAMOND -------------------
 
@@ -399,7 +393,7 @@ def graficar_y_guardar_resultados(G, seed_genes, diamond_genes, carpeta_resultad
     
     # Configurar la disposición de la red para la gráfica
     pos = nx.spring_layout(G)  # Disposición de los nodos en el espacio (layout de la red)
-    plt.figure(figsize=(500, 500))  # Tamaño de la figura
+    plt.figure(figsize=(20, 20))  # Tamaño de la figura
 
     # Nodos de semillas (color azul claro)
     nx.draw_networkx_nodes(G, pos, nodelist=seed_genes, node_color='lightblue', node_size=500, label="Seed Genes")
@@ -434,6 +428,9 @@ carpeta_resultados = 'resultados_propagacion'
 graficar_y_guardar_resultados(G, seed_genes, diamond_genes, carpeta_resultados)
 
 """
+Métodos descartados al no conseguir un buen método para validación que pueda 
+automatizar la elección
+
 def random_walk_with_restart(G, seed_nodes, restart_prob=0.85, max_iter=100):
     #Algoritmo de Random Walk with Restart
     nodes = list(G.nodes)
@@ -462,3 +459,11 @@ def personalized_pagerank(G, seed_nodes, alpha=0.85):
 
 
 """
+
+############################################################
+####### Analisis funcional de la red propagada #############
+############################################################
+
+# Ejecutar el análisis y guardar los resultados en CSV
+analyze_and_save_functional_enrichment(diamond_genes, organism_taxon_id, "FINAL_string_db_results.csv")
+
